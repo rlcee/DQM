@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import dash
 from dash import ALL, Input, Output, State, dcc, html
 
+from dqm.bands import in_force, newest_first
 from dqm.plot import PlotSpec, to_plotly_grid
 from dqm.plot.spec import PALETTE
 from dqm.schema import CODE_VALUES
@@ -140,6 +141,42 @@ def _parse_window(raw, mode: str) -> Tuple[Optional[float], str]:
     if value > ceiling:
         return None, f"{value:g} {unit} is beyond the data; the maximum is {ceiling:,}."
     return value, ""
+
+
+def _band_steps(ordered, key: str, vid: int, bands) -> Tuple[List, List]:
+    """The llimit and ulimit staircases across a metric's points.
+
+    A limit is not one number for the whole panel: committing a new band is
+    how a limit is changed, so the band in force steps partway along. Each
+    point is resolved where it sits -- by the same rule the evaluator judged
+    it by, so the drawn band is the one that did or did not alarm.
+
+    An x is repeated at each change to give the riser, since `lines` joins its
+    points directly and would otherwise slope between two bands as though the
+    limit had drifted.
+    """
+    lo: List[Tuple[Any, float]] = []
+    hi: List[Tuple[Any, float]] = []
+    previous = None
+    for point in ordered.itertuples():
+        band = in_force(bands,
+                        run=getattr(point, "start_run", None),
+                        subrun=getattr(point, "start_subrun", None),
+                        time=getattr(point, "start_time", None)).get(vid)
+        if band is None:
+            # No band covers this point; leave a hole rather than stretching
+            # a neighbouring band over it.
+            previous = None
+            continue
+        here = (float(band.llimit), float(band.ulimit))
+        x = getattr(point, key)
+        if previous is not None and here != previous:
+            lo.append((x, previous[0]))
+            hi.append((x, previous[1]))
+        lo.append((x, here[0]))
+        hi.append((x, here[1]))
+        previous = here
+    return lo, hi
 
 
 def _swatch(index: int) -> Any:
@@ -681,21 +718,21 @@ def register(app) -> None:
                 # Each panel has its own y axis, so its own band is readable
                 # here in a way it was not when everything shared one scale.
                 try:
-                    lq = dict(sid=sid, vid=vid, limit=None)
-                    if mode == "run" and run_floor is not None:
-                        lq["run_min"] = run_floor
-                    elif mode == "time" and window is not None:
-                        lq["recent_days"] = window
-                    lim = r.limits(**lq)
-                    if not lim.empty:
+                    # Every band for this metric, not just the ones near the
+                    # window: a band commited long ago still governs today.
+                    # dqm.bands resolves which one applies where.
+                    bands = newest_first(r.limits(sid=sid, vid=vid, limit=None))
+                    lo, hi = _band_steps(ordered, key, vid, bands)
+                    if lo:
                         # dqm.limits is populated independently of dqm.numbers,
-                        # so it may be absent even where measurements exist.
-                        spec.add_line(float(lim["llimit"].median()), "h",
-                                      label="llimit", color="#d62728")
-                        spec.add_line(float(lim["ulimit"].median()), "h",
-                                      label="ulimit", color="#d62728")
+                        # so a band may be absent even where measurements exist.
+                        spec.add_series(*zip(*lo), label="llimit",
+                                        color="#d62728", style="lines")
+                        spec.add_series(*zip(*hi), label="ulimit",
+                                        color="#d62728", style="lines")
                 except Exception:
-                    LOGGER.debug("no limits for sid=%s vid=%s", sid, vid)
+                    LOGGER.debug("no limits for sid=%s vid=%s", sid, vid,
+                                 exc_info=True)
 
             specs.append(spec)
 

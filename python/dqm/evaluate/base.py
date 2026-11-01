@@ -35,6 +35,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
+from dqm.bands import has_run
 from dqm.errors import DqmConfigError, DqmError
 from dqm.schema import ALARM_LEVEL_NAMES
 
@@ -65,22 +66,6 @@ class DqmEvaluateError(DqmError):
 # rather than a bare 1 that the reader has to look up.
 LEVEL_NAMES: Tuple[str, ...] = ALARM_LEVEL_NAMES
 LEVELS: Dict[str, int] = {name: i for i, name in enumerate(LEVEL_NAMES)}
-
-
-def has_run(run: Optional[int]) -> bool:
-    """True if this run number carries information.
-
-    Run 0 never identifies real Mu2e data or simulation, so a stored 0 means
-    "no run here" exactly as NULL does.  A day-aggregation source stores 0 for
-    every one of its intervals and keeps its real position in the timestamps.
-
-    Treating 0 as a run was a silent and expensive mistake: every interval of
-    such a source compared equal, so no point was ever "before" another, and
-    an evaluator with a lookback received an empty history on every single
-    point -- returning nothing, reporting nothing, and looking for all the
-    world like a clean source.
-    """
-    return run is not None and run != 0
 
 
 @dataclass(frozen=True)

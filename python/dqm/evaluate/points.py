@@ -25,30 +25,13 @@ import logging
 from dataclasses import replace
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-from dqm.evaluate.base import Limit, Measurement, Point, has_run
+from dqm.bands import (as_int as _as_int, as_time as _time, has_run,
+                       in_force, newest_first)
+from dqm.evaluate.base import Limit, Measurement, Point
 
 LOGGER = logging.getLogger("dqm.evaluate.points")
 
 __all__ = ["load_points", "load_history", "new_points", "History"]
-
-
-def _as_int(value) -> Optional[int]:
-    """None for a missing value, int otherwise.
-
-    Needed because an integer column that is NULL anywhere arrives from pandas
-    as a float, and 125205.0 in a log line or an SQL literal is wrong.
-    """
-    if value is None:
-        return None
-    try:
-        if value != value:  # NaN
-            return None
-    except TypeError:
-        pass
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _as_float(value) -> Optional[float]:
@@ -61,101 +44,25 @@ def _as_float(value) -> Optional[float]:
     return None if f != f else f
 
 
-def _time(value):
-    if value is None:
-        return None
-    try:
-        if value != value:
-            return None
-    except TypeError:
-        pass
-    # '-infinity' is how an interval with no time range is stored; it is not a
-    # date and must not be handed to an algorithm as one.
-    if str(value).startswith("-inf") or str(value).startswith("inf"):
-        return None
-    return value
+def _resolve_limits(bands, point: Point) -> Dict[int, Limit]:
+    """The band in force for each metric at this point, as Limits.
 
-
-def _covers(band, point: Point) -> bool:
-    """True if this limit's interval of validity contains the point.
-
-    By run when both have runs, otherwise by time.  A limit's interval is
-    typically open-ended -- 999999:999999 as the end run -- which is what
-    makes it an interval of validity rather than an annotation on one point.
+    The rule itself is in dqm.bands, shared with the display so that the band
+    drawn on a timeline is the band an alarm was judged against.  This is only
+    the adapter from a row to a Limit.
     """
-    b_start_run = _as_int(getattr(band, "start_run", None))
-    # Both sides need a real run.  Run 0 means "no run" (see has_run), and
-    # comparing 0 against 0 made every band cover every point of a
-    # day-aggregation source while its time range went unread.
-    if has_run(b_start_run) and point.has_runs:
-        b_end_run = _as_int(getattr(band, "end_run", None))
-        lo = (b_start_run, _as_int(getattr(band, "start_subrun", None)) or 0)
-        here = (point.start_run, point.start_subrun or 0)
-        if here < lo:
-            return False
-        if not has_run(b_end_run):
-            return True  # open-ended
-        hi = (b_end_run, _as_int(getattr(band, "end_subrun", None)) or 0)
-        return here <= hi
-
-    b_start = _time(getattr(band, "start_time", None))
-    if b_start is not None and point.start_time is not None:
-        if point.start_time < b_start:
-            return False
-        b_end = _time(getattr(band, "end_time", None))
-        return b_end is None or point.start_time <= b_end
-
-    # Neither comparison is possible -- a limit with no range cannot be shown
-    # to apply, and guessing that it does would silently alarm on the wrong
-    # band.
-    return False
-
-
-def _resolve_limits(limits, point: Point) -> Dict[int, Limit]:
-    """The band in force for each metric at this point.
-
-    dqm.limits is keyed per interval, but the intervals are intervals of
-    validity: a band set at run 2112 with no end run governs every later run
-    until a newer band supersedes it.  No interval in this database carries
-    both a limit and a measurement, so matching on iid finds nothing ever.
-
-    So: of the bands whose range covers this point, take the one committed
-    most recently -- highest lid, lid being a sequence and therefore commit
-    order.  Re-stating a band for a new run range is how a limit is changed,
-    and the newest statement is the one that counts.
-    """
-    out: Dict[int, Limit] = {}
-    if limits is None or len(limits) == 0:
-        return out
-    for row in limits:
-        vid = _as_int(getattr(row, "vid", None))
-        if vid is None or vid in out:
-            # Rows arrive newest-commit-first, so the first match for a vid is
-            # the one in force and later ones are superseded.
-            continue
-        if not _covers(row, point):
-            continue
-        out[vid] = Limit(
+    found = in_force(bands, run=point.start_run, subrun=point.start_subrun,
+                     time=point.start_time)
+    return {
+        vid: Limit(
             vid=vid,
             llimit=_as_float(getattr(row, "llimit", None)),
             ulimit=_as_float(getattr(row, "ulimit", None)),
             sigma=_as_float(getattr(row, "sigma", None)),
             alarmcode=_as_int(getattr(row, "alarmcode", None)) or 0,
         )
-    return out
-
-
-def _limit_rows(limits):
-    """Limit rows as a list, newest commit first.
-
-    Sorted once here rather than per point: a source may have hundreds of
-    bands and thousands of points.
-    """
-    if limits is None or limits.empty:
-        return []
-    ordered = limits.sort_values("lid", ascending=False) if "lid" in limits.columns \
-        else limits
-    return list(ordered.itertuples())
+        for vid, row in found.items()
+    }
 
 
 def _build(numbers, limits, names: Mapping[int, str]) -> List[Point]:
@@ -164,7 +71,7 @@ def _build(numbers, limits, names: Mapping[int, str]) -> List[Point]:
     for row in numbers.itertuples():
         by_iid.setdefault(int(row.iid), []).append(row)
 
-    bands = _limit_rows(limits)
+    bands = newest_first(limits)
 
     points: List[Point] = []
     for iid, rows in by_iid.items():

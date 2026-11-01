@@ -59,6 +59,7 @@ import pandas as pd
 
 from dqm import schema
 from dqm.errors import DqmConfigError, TooManyQueriesError
+from dqm.bands import in_force, newest_first
 from dqm.frames import empty_frame, is_truncated, preserve_attrs, tag
 from dqm.schema import (
     ALARM_VALUES,
@@ -69,7 +70,7 @@ from dqm.schema import (
     VALUES,
     Table,
 )
-from dqm.timeutil import TimeLike, cutoff, qe_time
+from dqm.timeutil import TimeLike, cutoff, qe_time, to_utc
 from dqm.reader.transport import (
     DEFAULT_DBNAME,
     DEFAULT_QE_NOCACHE_URL,
@@ -612,6 +613,27 @@ class DqmReader:
     def limits(self, **kwargs) -> pd.DataFrame:
         """Acceptable ranges from dqm.limits. See metrics() for the arguments."""
         return self.metrics(table="limits", **kwargs)
+
+    def limits_in_force(self, sid: int, vid: IdSpec = None, run=None,
+                        subrun=None, time=None, **kwargs) -> Dict[int, Any]:
+        """The band governing each metric at one run or time, by vid.
+
+        A limits row is not an annotation on one interval: its interval is one
+        of validity, so the band that applies at a point is the most recently
+        committed one whose range covers it. Asking dqm.limits for the rows
+        near a point and reading any of them is wrong whenever a limit has
+        been changed, which is why this is a query rather than a filter.
+
+        Resolves one position. To follow a timeline, fetch the bands once with
+        limits() and call dqm.bands.newest_first and in_force per point rather
+        than paying for a query each.
+        """
+        # An ISO string is normalized here, at the boundary a caller supplies:
+        # the per-point path passes datetimes already and should not pay for
+        # this on every comparison.
+        when = to_utc(time) if time is not None else None
+        rows = self.limits(sid=sid, vid=vid, limit=None, **kwargs)
+        return in_force(newest_first(rows), run=run, subrun=subrun, time=when)
 
     def count_metrics(
         self,
