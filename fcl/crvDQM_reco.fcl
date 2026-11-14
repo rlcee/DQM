@@ -1,0 +1,94 @@
+#
+# CRV DQM on KPP (extracted CRV) raw data: unpack, CRV reco, then the same
+# DqmCrv* modules and CRV tables as crvDQM.fcl. No histogram setting differs
+# from Run 1A/1B; only the job environment does (geometry, conditions,
+# coincidence settings).
+#
+#   mu2e -c DQM/fcl/crvDQM_kpp.fcl -s raw.mu2e.cosmics_crv.kpp_crv.<run>_<subrun>.art -T crvDQM_kpp.root
+#
+# On KPP reco files instead of raw, drop RecoPath/trigger_paths and point the
+# tags at the file's products (e.g. CrvDigi, CrvRecoPulses,
+# CrvCoincidenceClusterFinder).
+#
+# Geometry and conditions vary by run period and are set at the bottom:
+#   geometry  extracted_v02 before 2026-04-30, _v03 until 2026-06-24, _v04 after
+#   CRV conditions  text files in Offline/CRVConditions/data (no CRV IOV in the DB)
+#
+
+#include "Offline/fcl/minimalMessageService.fcl"
+#include "Offline/fcl/standardServices.fcl"
+#include "Offline/CRVReco/fcl/prolog.fcl"
+#include "Offline/CRVDQM/fcl/prolog.fcl"
+
+process_name : CrvDQMkpp
+
+source : { module_type : RootInput }
+
+services : @local::Services.Reco
+
+physics : {
+  producers : {
+    EWMProducer : {
+      module_type : EventHeaderFromCFOFragment
+      cfoTag      : "daq:CFO"
+      createEWM   : true
+      isSim       : false
+      diagLevel   : 0
+    }
+    CrvDigi : {
+      module_type   : CrvDigisFromArtdaqFragmentsFEBII
+      useROC4asROC2 : true
+      diagLevel     : 0
+    }
+    CrvRecoPulses               : @local::CrvRecoPulses
+    CrvCoincidenceClusterFinder : @local::CrvCoincidenceClusterFinder
+  }
+  analyzers : {
+    # configuration "extracted" books only the KPP readout (2 ROCs, links 0-3)
+    crvDigiDQM : {
+      module_type   : DqmCrvDigi
+      digiTag       : "CrvDigi"
+      statusTag     : "CrvDigi"
+      configuration : "extracted"
+      dqm           : @local::CRVDQM.Digi
+    }
+    crvStatusDQM : {
+      module_type   : DqmCrvStatus
+      statusTag     : "CrvDigi"
+      daqErrorTag   : "CrvDigi"
+      configuration : "extracted"
+      dqm           : @local::CRVDQM.Status
+    }
+    crvRecoDQM : {
+      module_type   : DqmCrvReco
+      clusterTag    : "CrvCoincidenceClusterFinder"
+      pulseTag      : "CrvRecoPulses"
+      configuration : "extracted"
+      dqm           : @local::CRVDQM.Reco
+    }
+  }
+  RecoPath      : [ EWMProducer, CrvDigi, CrvRecoPulses, CrvCoincidenceClusterFinder ]
+  crvDQM        : [ crvDigiDQM, crvStatusDQM, crvRecoDQM ]
+  #trigger_paths : [ RecoPath ]
+  trigger_paths : [ ]
+  end_paths     : [ crvDQM ]
+}
+
+# KPP coincidence settings for the extracted sectors.
+#include "Offline/CRVReco/fcl/epilog_extracted_v04.fcl"
+
+services.TFileService.fileName : "crvDQM_kpp.root"
+
+services.GeometryService.inputFile : "Offline/Mu2eG4/geom/geom_common_extracted_v04.txt"
+# services.GeometryService.inputFile : "Offline/Mu2eG4/geom/geom_common_extracted_v03.txt"
+# services.GeometryService.inputFile : "Offline/Mu2eG4/geom/geom_common_extracted_v02.txt"
+
+services.ProditionsService.crvStatus.useDb : true
+services.ProditionsService.crvCalib.useDb  : true
+services.DbService.purpose : Sim_best
+services.DbService.version : v1_5
+services.DbService.textFile : [
+  "Offline/CRVConditions/data/status_extracted_20260630.txt",
+  "Offline/CRVConditions/data/calib_extracted_20260630.txt"
+]
+services.DbService.verbose : 0
