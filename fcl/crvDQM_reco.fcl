@@ -1,18 +1,6 @@
 #
-# CRV DQM on KPP (extracted CRV) raw data: unpack, CRV reco, then the same
-# DqmCrv* modules and CRV tables as crvDQM.fcl. No histogram setting differs
-# from Run 1A/1B; only the job environment does (geometry, conditions,
-# coincidence settings).
-#
-#   mu2e -c DQM/fcl/crvDQM_kpp.fcl -s raw.mu2e.cosmics_crv.kpp_crv.<run>_<subrun>.art -T crvDQM_kpp.root
-#
-# On KPP reco files instead of raw, drop RecoPath/trigger_paths and point the
-# tags at the file's products (e.g. CrvDigi, CrvRecoPulses,
-# CrvCoincidenceClusterFinder).
-#
-# Geometry and conditions vary by run period and are set at the bottom:
-#   geometry  extracted_v02 before 2026-04-30, _v03 until 2026-06-24, _v04 after
-#   CRV conditions  text files in Offline/CRVConditions/data (no CRV IOV in the DB)
+# same as DQM/fcl/crvDQM_kpp.fcl but without reco paths so
+# it can be run on reco output
 #
 
 #include "Offline/fcl/minimalMessageService.fcl"
